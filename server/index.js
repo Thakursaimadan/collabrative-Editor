@@ -261,7 +261,7 @@ app.get("/documents/shared/:linkId", async (req, res) => {
     if (!document) {
       return res.status(404).json({ error: "Invalid or expired link" });
     }
-
+     
     const sharedLink = document.sharedLinks.find(link => link.linkId === linkId);
     
     res.json({ document, permission: sharedLink.permission });
