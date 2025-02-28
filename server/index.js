@@ -8,20 +8,32 @@ import mammoth from "mammoth";
 import { unlinkSync } from "fs";
 import { v4 as uuidv4 } from "uuid";
 import Document from "./schema/documentSchema.js";
+import crypto from "crypto";
+import User from "./schema/userSchema.js";
 
 const app = express();
-app.use(cors());
-app.use(express.json()); // Middleware to parse JSON request bodies
+// app.use(cors({
+//   origin: "*",
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "DELETE"]
+// }));
 
-// Database Connection
-mongoose.connect("mongodb://127.0.0.1:27017/collab-editing", {
+app.use(cors({
+  origin: ["http://localhost:3000", "http://10.0.52.:214:3000"],
+  credentials: true,
+}));
+
+
+app.use(express.json()); 
+
+mongoose.connect("mongodb+srv://coder1729c:JAjAsoAZLEJKvSqx@documents.mri3g.mongodb.net/?retryWrites=true&w=majority&appName=documents", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 }).then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 const PORT = 9000;
-const server = app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+const server = app.listen(PORT, "0.0.0.0", () => console.log(`✅ Server running on port ${PORT}`));
 
 const upload = multer({ dest: "uploads/" });
 
@@ -79,15 +91,104 @@ io.on("connection", (socket) => {
 
 app.post("/documents", async (req, res) => {
   try {
-    const docId = uuidv4(); // Generate a unique ID
-    const newDocument = new Document({ _id: docId, content: "" });
+    const { username } = req.body; // Owner ID passed from the frontend
+    if (!username) {
+      return res.status(400).json({ error: "Owner ID is required" });
+    }
+
+    const docId = uuidv4();
+    const newDocument = new Document({ _id: docId, content: "", title: "", owner: username });
+
     await newDocument.save();
+
+    await User.findByIdAndUpdate(username, { $push: { documents: docId } });
+
     res.status(201).json({ docId });
   } catch (error) {
     console.error("❌ Error creating document:", error);
     res.status(500).json({ error: "Server error" });
   }
 });
+
+
+app.post("/users/register", async (req, res) => {
+  try {
+    const { name } = req.body;
+    console.log("printing name",req.body);
+
+    if (!name) {
+      return res.status(400).json({ error: "Name is required" });
+    }
+
+    let user = await User.findOne({ name });
+    console.log(user);
+
+    if (!user) {
+      // Register new user if not found
+      user = new User({ name, _id: uuidv4() });
+      await user.save();
+    }
+
+    res.status(200).json({ message: "User logged in successfully", userId: user._id });
+  } catch (error) {
+    console.error("❌ Error registering user:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/users/:id/documents", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).populate("documents");
+    if (!user) {
+      return res.status(404).app.get("/users/:id", async (req, res) => {
+        try {
+          const user = await User.findById(req.params.id).populate("documents");
+          if (!user) {
+            return res.status(404).json({ error: "User not found" });
+          }
+      
+          res.json({ name: user.name,documents: user.documents });
+        } catch (error) {
+          console.error("❌ Error fetching user details:", error);
+          res.status(500).json({ error: "Server error" });
+        }
+      });
+    }
+
+    res.json(user.documents);
+  } catch (error) {
+    console.error("❌ Error fetching user's documents:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
+
+app.put("/documents/:id/title", async (req, res) => {
+  try {
+    const { title } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+
+    const updatedDocument = await Document.findByIdAndUpdate(
+      req.params.id,
+      { title, lastUpdated: new Date() },  // Update title and lastUpdated field
+      { new: true }  // Return the updated document
+    );
+
+    if (!updatedDocument) {
+      return res.status(404).json({ error: "Document not found" });
+    }
+
+    res.json(updatedDocument);
+  } catch (error) {
+    console.error("❌ Error updating title:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 
 
@@ -119,6 +220,87 @@ app.post("/upload-docx", upload.single("file"), async (req, res) => {
     res.status(500).json({ error: "Failed to process file." });
   }
 });
+
+
+
+
+app.post("/documents/:id/share", async (req, res) => {
+  try {
+    const { permission } = req.body;
+    if (!["view", "edit"].includes(permission)) {
+      return res.status(400).json({ error: "Invalid permission type" });
+    }
+
+    const document = await Document.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ error: "Document not found" });
+    }
+
+    // Generate a unique link ID
+    const linkId = crypto.randomBytes(8).toString("hex");
+
+    // Store the shared link
+    document.sharedLinks.push({ linkId, permission });
+    await document.save();
+
+    const sharedURL = `http://localhost:3000/documents/shared/${linkId}`;
+    res.json({ message: "Shareable link generated", sharedURL, permission });
+  } catch (error) {
+    console.error("❌ Error generating shareable link:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
+app.get("/documents/shared/:linkId", async (req, res) => {
+  try {
+    const { linkId } = req.params;
+    
+    const document = await Document.findOne({ "sharedLinks.linkId": linkId });
+    if (!document) {
+      return res.status(404).json({ error: "Invalid or expired link" });
+    }
+
+    const sharedLink = document.sharedLinks.find(link => link.linkId === linkId);
+    
+    res.json({ document, permission: sharedLink.permission });
+  } catch (error) {
+    console.error("❌ Error accessing shared document:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
+
+app.put("/documents/shared/:linkId", async (req, res) => {
+  try {
+    const { linkId } = req.params;
+    const { content } = req.body;
+
+    const document = await Document.findOne({ "sharedLinks.linkId": linkId });
+    if (!document) {
+      return res.status(404).json({ error: "Invalid or expired link" });
+    }
+
+    const sharedLink = document.sharedLinks.find(link => link.linkId === linkId);
+    
+    if (sharedLink.permission !== "edit") {
+      return res.status(403).json({ error: "You do not have permission to edit this document" });
+    }
+
+    document.content = content;
+    document.lastUpdated = new Date();
+    await document.save();
+
+    res.json({ message: "Document updated successfully" });
+  } catch (error) {
+    console.error("❌ Error updating shared document:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 
 

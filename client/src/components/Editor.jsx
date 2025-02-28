@@ -4,7 +4,7 @@ import "quill/dist/quill.snow.css";
 import { useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { io } from "socket.io-client";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 
 const Component = styled.div`
   background-color: #f5f5f5;
@@ -28,11 +28,19 @@ const toolbarOptions = [
 ];
 
 const Editor = () => {
-  const { docId } = useParams(); // Get document ID from URL
+  const { docId } = useParams();
+  const navigate = useNavigate();
   const [socket, setSocket] = useState(null);
   const [quill, setQuill] = useState(null);
   const containerRef = useRef(null);
   const quillRef = useRef(null);
+
+  useEffect(() => {
+    const username = localStorage.getItem("username");
+    if (!username) {
+      navigate("/login");
+    }
+  }, [navigate]);
 
   useEffect(() => {
     if (!containerRef.current || quillRef.current) return;
@@ -78,7 +86,7 @@ const Editor = () => {
     return () => {
       quill.off("text-change", handleChange);
     };
-  }, [socket, quill,docId]);
+  }, [socket, quill, docId]);
 
   useEffect(() => {
     if (!socket || !quill) return;
@@ -90,9 +98,8 @@ const Editor = () => {
     return () => {
       socket.off("receive-changes");
     };
-  }, [socket, quill,docId]);
+  }, [socket, quill, docId]);
 
-  // Save document every 2 seconds
   useEffect(() => {
     if (!socket || !quill) return;
 
@@ -101,7 +108,7 @@ const Editor = () => {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [socket, quill,docId]);
+  }, [socket, quill, docId]);
 
   return (
     <Component>
@@ -109,5 +116,4 @@ const Editor = () => {
     </Component>
   );
 };
-
 export default Editor;
